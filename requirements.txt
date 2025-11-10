@@ -1,0 +1,11 @@
+beautifulsoup4
+google_api_python_client
+google_auth_oauthlib
+pandas
+protobuf
+pydantic
+python-dotenv
+python_dateutil
+streamlit
+google-generativeai
+google-auth
