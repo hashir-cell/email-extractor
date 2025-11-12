@@ -19,7 +19,6 @@ def get_gmail_service():
         token_data = json.loads(st.secrets["GMAIL_TOKEN"])
         creds = Credentials.from_authorized_user_info(token_data, SCOPES)
     except Exception:
-        # Fallback: try to load from local token.json (for local dev)
         if os.path.exists("token.json"):
             creds = Credentials.from_authorized_user_file("token.json", SCOPES)
         else:
