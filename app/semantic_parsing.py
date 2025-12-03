@@ -4,11 +4,8 @@ from datetime import datetime
 import google.generativeai as genai
 import json
 import os
-from dotenv import load_dotenv
-from pydantic import BaseModel
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
 from typing import List
 from dotenv import load_dotenv
 load_dotenv()

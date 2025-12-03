@@ -1,34 +1,9 @@
-import os
-import json
-import base64
-import hashlib
+import base64, hashlib, os
 from bs4 import BeautifulSoup
 from datetime import datetime
 from dateutil import parser as date_parser
 import pandas as pd
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-import streamlit as st
 
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
-
-def get_gmail_service():
-    """Load Gmail API service using pre-generated OAuth token (works on Streamlit Cloud)."""
-    try:
-        token_data = json.loads(st.secrets["GMAIL_TOKEN"])
-        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-    except Exception:
-        if os.path.exists("token.json"):
-            creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-        else:
-            raise RuntimeError("❌ No Gmail credentials found in st.secrets or token.json")
-
-    # Refresh token automatically if expired
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-
-    return build("gmail", "v1", credentials=creds)
 
 def parse_date_dynamic(date_value):
     if isinstance(date_value, pd.Timestamp):
@@ -38,217 +13,150 @@ def parse_date_dynamic(date_value):
     if isinstance(date_value, str):
         try:
             return date_parser.parse(date_value, fuzzy=True)
-        except Exception:
-            return None
+        except: return None
     return None
 
 def get_email_body(payload):
-    """Extract plain or HTML text content from Gmail message payload."""
+    print("🔍 Extracting email body...")
     if "body" in payload and "data" in payload["body"]:
         try:
+            print("📄 Plain body found")
             data = payload["body"]["data"]
             return base64.urlsafe_b64decode(data).decode("utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            print("⚠ Body decode failed", e)
+
     if "parts" in payload:
-        for part in payload["parts"]:
-            mime_type = part.get("mimeType", "")
-            if mime_type == "text/plain":
+        for idx, part in enumerate(payload["parts"]):
+            mime = part.get("mimeType","")
+            print(f"➡ scanning part[{idx}] type={mime}")
+
+            if mime == "text/plain":
                 data = part["body"].get("data")
                 if data:
+                    print("📄 Extracted text/plain successfully")
                     return base64.urlsafe_b64decode(data).decode("utf-8")
-            elif mime_type == "text/html":
+
+            elif mime == "text/html":
                 data = part["body"].get("data")
                 if data:
-                    html = base64.urlsafe_b64decode(data).decode("utf-8")
-                    return BeautifulSoup(html, "html.parser").get_text()
+                    print("🌐 HTML extracted & parsed")
+                    html = base64.urlsafe_b64decode(data).decode()
+                    return BeautifulSoup(html,"html.parser").get_text()
+
             else:
                 result = get_email_body(part)
-                if result.strip():
-                    return result
+                if result and result.strip(): return result
+
     return "[No text content found]"
 
-def fetch_recent_emails(start_date, end_date):
-    """Fetch emails within a date range."""
-    service = get_gmail_service()
+
+def fetch_recent_emails(service, start_date, end_date):
     query = f"after:{start_date} before:{end_date}"
+    print(f"\n🔍 Gmail Query → {query}")
+
     results = service.users().messages().list(userId="me", q=query).execute()
     messages = results.get("messages", [])
+    print(f"📬 Found {len(messages)} emails\n")
+
     email_data = []
 
-    for msg in messages:
+    for i,msg in enumerate(messages):
         msg_id = msg["id"]
-        gmail_url = f"https://mail.google.com/mail/u/0/#inbox/{msg_id}"
+        print(f"📩 EMAIL {i+1}/{len(messages)} MSG-ID: {msg_id}")
+
         msg_data = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+        payload = msg_data.get("payload",{})
+        headers = payload.get("headers",[])
 
-        headers = msg_data["payload"]["headers"]
-        email_info = {"id": msg_id, "gmail_url": gmail_url, "from": None, "subject": None, "date": None, "snippet": None, "attachments": []}
+        info = {"id":msg_id,"attachments":[], "snippet":""}
 
-        for header in headers:
-            name = header["name"].lower()
-            if name == "from":
-                email_info["from"] = header["value"]
-            elif name == "subject":
-                email_info["subject"] = header["value"]
-            elif name == "date":
-                email_info["date"] = header["value"]
 
-        email_info["snippet"] = get_email_body(msg_data["payload"])[:300]
+        for h in headers:
+            name=h["name"].lower()
+            if name=="from": info["from"]=h["value"]
+            if name=="subject": info["subject"]=h["value"]
+            if name=="date": info["date"]=h["value"]
 
-        # Extract attachments (if any)
-        if "parts" in msg_data["payload"]:
-            for part in msg_data["payload"]["parts"]:
-                body = part.get("body", {})
-                if "attachmentId" in body:
-                    att_id = body["attachmentId"]
-                    attachment = service.users().messages().attachments().get(userId="me", messageId=msg_id, id=att_id).execute()
+        info["snippet"] = get_email_body(payload)[:300]
+
+        if "parts" in payload:
+            print("🔍 Scanning parts for attachments...")
+
+            for j,part in enumerate(payload["parts"]):
+                mime = part.get("mimeType","")
+                print(f"  ➤ Part {j} → mime={mime}")
+
+                if mime != "application/pdf":
+                    print("   ⏩ Skipped (not pdf)")
+                    continue
+
+                body = part.get("body",{})
+                att_id = body.get("attachmentId")
+
+                if not att_id:
+                    print("   ❌ attachmentId missing → cannot download")
+                    continue
+
+                print(f"   📎 PDF Attachment detected → ID={att_id}")
+
+                try:
+                    attachment = service.users().messages().attachments().get(
+                        userId="me", messageId=msg_id,id=att_id).execute()
+
                     data = attachment.get("data")
-                    if data:
-                        file_bytes = base64.urlsafe_b64decode(data)
-                        sha_hash = hashlib.sha256(file_bytes).hexdigest()
-                        email_info["attachments"].append({
-                            "filename": part.get("filename", "unknown"),
-                            "hash": sha_hash,
-                        })
-        email_data.append(email_info)
+                    if not data:
+                        print("   ⚠ NO DATA FIELD FOUND INSIDE ATTACHMENT!")
+                        continue
 
-    print(f"✅ Found {len(email_data)} emails between {start_date} - {end_date}")
+                    file_bytes = base64.urlsafe_b64decode(data)
+                    filename = part.get("filename","unknown.pdf")
+
+                    info["attachments"].append({
+                        "filename":filename,
+                        "bytes":file_bytes,
+                        "hash":hashlib.sha256(file_bytes).hexdigest()
+                    })
+
+                except Exception as e:
+                    print("   ❌ Attachment fetch failed", e)
+
+        else:
+            print("❌ No parts found → No attachments")
+
+        email_data.append(info)
+
+    print(f"\n====== DONE FETCHING EMAILS ======")
     return email_data
 
 
-# from email import parser
-# import os
-# import base64
-# import hashlib
-# from bs4 import BeautifulSoup
-# from google.auth.transport.requests import Request
-# from google.oauth2.credentials import Credentials
-# from google_auth_oauthlib.flow import InstalledAppFlow
-# from googleapiclient.discovery import build
-# from datetime import datetime
-# from dateutil import parser as date_parser
-# import pandas as pd
+import os
+SAVE_DIR = "downloaded_pdfs"
+os.makedirs(SAVE_DIR, exist_ok=True)
 
-# BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# CREDENTIALS_PATH = os.path.join(BASE_DIR, "credentials.json")
-# TOKEN_PATH = os.path.join(BASE_DIR, "token.json")
+def save_only_pdf_attachments(messages):
+    saved_files = []
 
-# SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+    for msg in messages:
+        for att in msg.get("attachments", []):
 
-# def parse_date_dynamic(date_value):
-#     if isinstance(date_value, (pd.Timestamp, )):
-#         return date_value.to_pydatetime()
-#     elif isinstance(date_value, (int, float)):
-#         return datetime.fromtimestamp(date_value)
-#     elif isinstance(date_value, str):
-#         try:
-#             return parser.parse(date_value, fuzzy=True)
-#         except Exception as e:
-#             print(f"⚠️ Could not parse date: {date_value} ({e})")
-#             return None
-#     else:
-#         return None
+            file_name = att.get("filename")
+            pdf_bytes = att.get("bytes")   
 
-# def get_gmail_service():
-#     creds = None
-#     if os.path.exists(TOKEN_PATH):
-#         creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
-#     if not creds or not creds.valid:
-#         if creds and creds.expired and creds.refresh_token:
-#             creds.refresh(Request())
-#         else:
-#             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-#             creds = flow.run_local_server(port=0)
-#         with open(TOKEN_PATH, "w") as token:
-#             token.write(creds.to_json())
-#     return build("gmail", "v1", credentials=creds)
+            if not pdf_bytes:
+                print(f"⚠ No PDF data found for {file_name}")
+                continue
 
-# def parse_date_dynamic(date_value):
-#     if isinstance(date_value, pd.Timestamp):
-#         return date_value.to_pydatetime()
-#     if isinstance(date_value, (int, float)):
-#         return datetime.fromtimestamp(date_value)
-#     if isinstance(date_value, str):
-#         try:
-#             return date_parser.parse(date_value, fuzzy=True)
-#         except Exception:
-#             return None
-#     return None
+            path = os.path.join(SAVE_DIR, file_name)
 
-# def get_email_body(payload):
-#     if "body" in payload and "data" in payload["body"]:
-#         try:
-#             data = payload["body"]["data"]
-#             return base64.urlsafe_b64decode(data).decode("utf-8")
-#         except Exception:
-#             pass
-#     if "parts" in payload:
-#         for part in payload["parts"]:
-#             mime_type = part.get("mimeType", "")
-#             if mime_type == "text/plain":
-#                 data = part["body"].get("data")
-#                 if data:
-#                     return base64.urlsafe_b64decode(data).decode("utf-8")
-#             elif mime_type == "text/html":
-#                 data = part["body"].get("data")
-#                 if data:
-#                     html = base64.urlsafe_b64decode(data).decode("utf-8")
-#                     return BeautifulSoup(html, "html.parser").get_text()
-#             else:
-#                 result = get_email_body(part)
-#                 if result.strip():
-#                     return result
-#     return "[No text content found]"
+            try:
+                with open(path, "wb") as f:
+                    f.write(pdf_bytes)
 
-# def extract_text_from_image(image_bytes):
-#     return "[OCR skipped]"
+                saved_files.append(path)
+                print(f"📥 SAVED → {path}")
 
-# def fetch_recent_emails(start_date, end_date):
-#     service = get_gmail_service()
-#     query = f"after:{start_date} before:{end_date}"
-#     print(f"📨 Fetching emails between {query}...")
-#     results = service.users().messages().list(userId="me", q=query).execute()
-#     messages = results.get("messages", [])
-#     email_data = []
-#     for msg in messages:
-#         msg_id = msg["id"]
-#         gmail_url = f"https://mail.google.com/mail/u/0/#inbox/{msg_id}"
-#         msg_data = service.users().messages().get(userId="me", id=msg["id"], format="full").execute()
-#         headers = msg_data["payload"]["headers"]
-#         email_info = {
-#             "id": msg["id"],
-#             "gmail_url": gmail_url,
-#             "from": None,
-#             "subject": None,
-#             "date": None,
-#             "snippet": None,
-#             "attachments": [],
-#         }
-#         for header in headers:
-#             name = header["name"].lower()
-#             if name == "from":
-#                 email_info["from"] = header["value"]
-#             elif name == "subject":
-#                 email_info["subject"] = header["value"]
-#             elif name == "date":
-#                 email_info["date"] = header["value"]
-#         email_info["snippet"] = get_email_body(msg_data["payload"])[:300]
-#         if "parts" in msg_data["payload"]:
-#             for part in msg_data["payload"]["parts"]:
-#                 body = part.get("body", {})
-#                 if "attachmentId" in body:
-#                     att_id = body["attachmentId"]
-#                     attachment = service.users().messages().attachments().get(
-#                         userId="me", messageId=msg["id"], id=att_id
-#                     ).execute()
-#                     data = attachment.get("data")
-#                     if data:
-#                         file_bytes = base64.urlsafe_b64decode(data)
-#                         sha_hash = hashlib.sha256(file_bytes).hexdigest()
-#                         email_info["attachments"].append({
-#                             "filename": part.get("filename", "unknown"),
-#                             "hash": sha_hash,
-#                         })
-#         email_data.append(email_info)
-#     print(f"✅ Found {len(email_data)} emails between {start_date} - {end_date}")
-#     return email_data
+            except Exception as e:
+                print(f"❌ Failed saving {file_name}: {e}")
+
+    return saved_files

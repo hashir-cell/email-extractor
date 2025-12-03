@@ -3,8 +3,8 @@ import logging
 from datetime import datetime, timezone
 from time import time
 import pandas as pd
-from gmail_utils import parse_date_dynamic
-from llm_utils import score_match_with_gemini
+from app.gmail_utils import parse_date_dynamic
+from app.llm_utils import score_match_with_gemini
 
 logging.basicConfig(
     level=logging.INFO,
@@ -254,23 +254,12 @@ def score_with_gemini(txn: dict, filtered_emails: list, threshold: int = 60, max
 
 def hybrid_match(transactions: list, emails: list, threshold: int = 90, date_window: int = 3, 
                  min_matches: int = 2, max_emails_to_score: int = 10):
-    logger.info("="*80)
-    logger.info(f"HYBRID MATCH START")
-    logger.info(f"  Transactions: {len(transactions)}")
-    logger.info(f"  Total Emails: {len(emails)}")
-    logger.info(f"  Config: threshold={threshold}, date_window={date_window}, min_matches={min_matches}, max_llm_calls={max_emails_to_score}")
-    logger.info("="*80)
     
-    overall_start = time()
+
     all_digest = []
     all_exceptions = []
     
     for idx, txn in enumerate(transactions):
-        logger.info("")
-        logger.info(f"{'='*90}")
-        logger.info(f"Processing Transaction {idx+1}/{len(transactions)}")
-        logger.info(f"{'='*90}")
-        
         txn_start = time()
         
         filtered_emails = filter_emails(txn, emails, date_window, min_matches)
@@ -282,15 +271,5 @@ def hybrid_match(transactions: list, emails: list, threshold: int = 90, date_win
         
         txn_elapsed = time() - txn_start
         logger.info(f"Transaction {idx+1} completed in {txn_elapsed:.2f}s")
-    
-    overall_elapsed = time() - overall_start
-    logger.info("")
-    logger.info("="*80)
-    logger.info(f"HYBRID MATCH COMPLETE")
-    logger.info(f"  Total Time: {overall_elapsed:.2f}s ({overall_elapsed/60:.1f} minutes)")
-    logger.info(f"  Avg per Transaction: {overall_elapsed/len(transactions):.2f}s")
-    logger.info(f"  Matches Found: {len(all_digest)}")
-    logger.info(f"  Exceptions: {len(all_exceptions)}")
-    logger.info("="*80)
     
     return all_digest, all_exceptions

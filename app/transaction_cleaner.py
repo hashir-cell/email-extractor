@@ -7,7 +7,7 @@ import pandas as pd
 from datetime import datetime
 from typing import List, Dict
 import re
-from semantic_parsing import parser
+from app.semantic_parsing import parser
 
 
 def domain_to_vendor(domain: str) -> str:
@@ -32,7 +32,9 @@ def clean_transactions(df:pd.DataFrame) -> List[Dict]:
     df["vendor_name"] = df["Vendor"].apply(domain_to_vendor) if "Vendor" in df.columns else ""
     df["description"] = df["description"].fillna("").str.strip() if "description" in df.columns else ""
     df["transaction_id"] = df["transaction_id"].astype(str).str.strip() if "transaction_id"  in df.columns else "" 
-    df["amount"] = df["amount"].apply(lambda x: abs(float(str(x).replace(",", "").strip())))
+    df["amount"] = df["amount"].apply(
+    lambda x: abs(float(str(x).replace(",", "").strip())) if str(x).strip() not in ["", None] else None
+)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
 
