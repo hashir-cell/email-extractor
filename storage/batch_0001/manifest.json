@@ -1,0 +1,7 @@
+{
+  "batch_id": 1,
+  "chunks": 901,
+  "faiss_path": "storage\\batch_0001\\faiss.index",
+  "bm25_tokenized": "storage\\batch_0001\\bm25_tokenized.json",
+  "chunks_path": "storage\\batch_0001\\chunks.json"
+}

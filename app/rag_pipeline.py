@@ -337,13 +337,7 @@ def process_batch(batch_id: int, emails: List[Dict[str, Any]], storage_root: Pat
 
 
 def csv_row_to_enhanced_query(csv_row):
-    """
-    Minimal logic:
-    - Convert any field named 'amount' (case-insensitive) to float
-    - Keep everything else unchanged
-    - text_query = full concatenation of all values
-    """
-    
+
     structured = {}
     parts = []
 
@@ -353,13 +347,12 @@ def csv_row_to_enhanced_query(csv_row):
 
         key_lower = key.lower()
 
-        # ONLY place where logic happens:
         if key_lower == "amount":
             try:
                 structured["amount"] = float(value)
                 parts.append(str(structured["amount"]))
             except:
-                # fallback: treat as normal text
+
                 structured["amount"] = value
                 parts.append(str(value))
         else:
@@ -523,44 +516,15 @@ def format_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         meta = chunk.get("metadata", {})
         md = r.get("match_details", {})
 
-        # Extract match flags
+        base_score = md.get("base_score", 0.0)
+        
         amount = md.get("amount_match", False)
         vendor = md.get("vendor_match", False)
         date = md.get("date_match", False)
         invoice = md.get("invoice_match", False)
 
-        score = 0.0
-
-
-        if invoice:
-            score += 80
-
-        if amount:
-            score += 60
-
-        if vendor:
-            score += 30
-
-        if date:
-            score += 10
-
-        if amount and vendor and not invoice:
-            score = max(score, 80)
-
-        if invoice and amount:
-            score = max(score, 90)
-
-        if invoice and amount and vendor:
-            score = max(score, 95)
-
-        if invoice and amount and vendor and date:
-            score = 100
-
-        # Cap at 100
-        score = min(100, score)
-
         formatted_result = {
-            "match_score": f"{score:.2f}%",
+            "base_score": float(base_score),  
             "match_details": {
                 "amount_matched": amount,
                 "vendor_matched": vendor,
@@ -585,45 +549,6 @@ def format_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return formatted
 
 
-# def format_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-
-#     formatted = []
-#     for r in results:
-#         chunk = r["chunk"]
-#         meta = chunk.get("metadata", {})
-#         match_details = r.get("match_details", {})
-        
-
-#         score_raw = r.get("score_rerank", r.get("score", 0.0))
-
-#         if "score_rerank" in r:
-#             score_percentage = min(100, max(0, (score_raw + 10) / 20 * 100))
-#         else:
-#             score_percentage = min(100, max(0, score_raw * 50))  # Adjusted for boosted scores
-        
-#         formatted_result = {
-#             "match_score": f"{score_percentage:.2f}%",
-#             "match_details": {
-#                 "amount_matched": match_details.get("amount_match", False),
-#                 "vendor_matched": match_details.get("vendor_match", False),
-#                 "date_matched": match_details.get("date_match", False),
-#                 "invoice_matched": match_details.get("invoice_match", False)
-#             },
-#             "location": {
-#                 "pdf_name": meta.get("pdf_name", "Unknown"),
-#                 "page": chunk.get("page", "Unknown"),
-#                 "email_id": meta.get("email_id", "Unknown"),
-#                 "sender": meta.get("sender", "Unknown"),
-#                 "date": meta.get("date", "Unknown")
-#             },
-#             "extracted_amounts": chunk.get("amounts", []),
-#             "content": chunk.get("content", ""),
-#             "type": chunk.get("type", "text"),
-#             "extraction_method": chunk.get("extraction_method", "unknown")
-#         }
-#         formatted.append(formatted_result)
-    
-#     return formatted
 
 
 def ingest_all_emails(email_inputs: List[Dict[str, Any]], batch_size: int = BATCH_SIZE_EMAILS) -> List[Dict[str, Any]]:

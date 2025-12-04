@@ -1,10 +1,11 @@
 from typing import List, Dict, Any
 from time import time
+import numpy as np
 
 from app.rag_pipeline import INDEX_ROOT, csv_row_to_enhanced_query, format_results, global_search
 
 
-RAG_THRESHOLD = 50.0  
+RAG_THRESHOLD = 0.5
 
 def score_rag_transaction(txn: dict, rag_results: List[Dict[str, Any]], threshold: float = RAG_THRESHOLD, max_results: int = 5):
 
@@ -19,27 +20,38 @@ def score_rag_transaction(txn: dict, rag_results: List[Dict[str, Any]], threshol
             "TransactionDate": txn.get("date"),
             "Amount": txn.get("amount"),
             "VendorName": txn.get("vendor_name"),
-            "Reason": "No RAG results found"
+            "Description": txn.get("description"),
+            "Source": best_match["location"].get("pdf_name", ""),
+            "Page": best_match["location"].get("page", ""),
+            "EmailLink": f"https://mail.google.com/mail/u/0/#inbox/{best_match['location'].get('email_id', '')}",
+            "EmailSender": best_match["location"].get("sender", ""),
+            "EmailDate": best_match["location"].get("date", ""),
+            "BaseScore": f"{best_score_percent:.2f}%",
+            "ContentPreview": best_match["content"][:300]
         })
         return digest, exceptions
 
-    # Process top N results
     best_match = None
-    best_score = 0
+    best_score = 0.0
+    
     for idx, result in enumerate(rag_results[:max_results]):
-        # Extract numerical score from formatted match_score string
-        score_str = result.get("match_score", "0%").replace("%", "")
-        try:
-            score = float(score_str)
-        except:
-            score = 0
-
-        if score > best_score:
-            best_score = score
+        base_score = result.get("base_score", 0.0)
+        
+        if isinstance(base_score, (np.floating, np.integer)):
+            base_score = float(base_score)
+        
+        if base_score > best_score:
+            best_score = base_score
             best_match = result
 
+    best_score_percent = best_score * 100
+
     if best_match and best_score >= threshold:
-        # Digest entry
+
+        rerank_score = best_match.get("score_rerank", 0.0)
+        if isinstance(rerank_score, (np.floating, np.integer)):
+            rerank_score = float(rerank_score)
+            
         digest.append({
             "TransactionID": txn_id,
             "TransactionDate": txn.get("date"),
@@ -51,22 +63,46 @@ def score_rag_transaction(txn: dict, rag_results: List[Dict[str, Any]], threshol
             "EmailLink": f"https://mail.google.com/mail/u/0/#inbox/{best_match['location'].get('email_id', '')}",
             "EmailSender": best_match["location"].get("sender", ""),
             "EmailDate": best_match["location"].get("date", ""),
-            "MatchScore": best_score,
-            "MatchDetails": best_match["match_details"],
+            "BaseScore": f"{best_score_percent:.2f}%",
             "ContentPreview": best_match["content"][:300]
         })
     else:
-
-        reason = f"Best RAG score {best_score:.2f}% below threshold {threshold}" if best_match else "No confident RAG match"
-        exceptions.append({
-            "TransactionID": txn_id,
-            "TransactionDate": txn.get("date"),
-            "Amount": txn.get("amount"),
-            "VendorName": txn.get("vendor_name"),
-            "Description": txn.get("description"),
-            "BestScore": best_score,
-            "Reason": reason
-        })
+        if best_match:
+            rerank_score = best_match.get("score_rerank", 0.0)
+            if isinstance(rerank_score, (np.floating, np.integer)):
+                rerank_score = float(rerank_score)
+                
+            exceptions.append({
+                "TransactionID": txn_id,
+                "TransactionDate": txn.get("date"),
+                "Amount": txn.get("amount"),
+                "VendorName": txn.get("vendor_name"),
+                "Description": txn.get("description"),
+                "Source": best_match["location"].get("pdf_name", ""),
+                "Page": best_match["location"].get("page", ""),
+                "EmailLink": f"https://mail.google.com/mail/u/0/#inbox/{best_match['location'].get('email_id', '')}",
+                "EmailSender": best_match["location"].get("sender", ""),
+                "EmailDate": best_match["location"].get("date", ""),
+                "BaseScore": f"{best_score_percent:.2f}%",
+                "ContentPreview": best_match["content"][:300],
+                "Reason": f"Best RAG score {best_score_percent:.2f}% below threshold {threshold*100:.0f}%"
+            })
+        else:
+            exceptions.append({
+                "TransactionID": txn_id,
+                "TransactionDate": txn.get("date"),
+                "Amount": txn.get("amount"),
+                "VendorName": txn.get("vendor_name"),
+                "Description": txn.get("description"),
+                "Source": "N/A",
+                "Page": "N/A",
+                "EmailLink": "N/A",
+                "EmailSender": "N/A",
+                "EmailDate": "N/A",
+                "BaseScore": "0.00%",
+                "ContentPreview": "",
+                "Reason": "No confident RAG match"
+            })
 
     elapsed = time() - start_time
     print(f"Processed Transaction {txn_id} in {elapsed:.2f}s")
@@ -78,7 +114,6 @@ def hybrid_match_rag(transactions: List[Dict[str, Any]], emails: List[Dict[str, 
     all_digest = []
     all_exceptions = []
 
-
     batch_dirs = sorted([p for p in INDEX_ROOT.iterdir() if p.is_dir()])
 
     for txn in transactions:
@@ -87,7 +122,6 @@ def hybrid_match_rag(transactions: List[Dict[str, Any]], emails: List[Dict[str, 
         rag_results_raw = global_search(query_info, batch_dirs, top_k=global_top_k, top_k_per_batch=top_k_per_batch, rerank=True)
         print(rag_results_raw)
         formatted_results = format_results(rag_results_raw)
-
 
         digest, exceptions = score_rag_transaction(txn, formatted_results)
         all_digest.extend(digest)

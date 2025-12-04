@@ -137,36 +137,13 @@ async def process_csv(
         emails = fetch_all_selected(session_id, start, end, selected)
         all_emails.extend(emails)
 
-
-    emails_metadata = []
-
-    for email in all_emails:
-        meta = {
-            "email_id": email.get("id", ""),
-            "from": email.get("from", ""),
-            "subject": email.get("subject", ""),
-            "date": email.get("date", ""),
-            "account": email.get("account", ""),
-            "snippet": email.get("snippet", ""),
-            "attachments": [
-                {
-                    "filename": att.get("filename", ""),
-                    "hash":     att.get("hash", ""),
-                    "size":     len(att.get("bytes", b""))
-                }
-                for att in email.get("attachments", [])
-            ]
-        }
-        emails_metadata.append(meta)
-
-
-    manifests = ingest_all_emails(all_emails, batch_size=10)
+    manifests = ingest_all_emails(all_emails, batch_size=100)
     print(manifests)
 
 
     digest, exceptions = hybrid_match_rag(
         transactions=transactions,
-        emails=emails_metadata,    
+        emails=all_emails,    
         top_k_per_batch=20,
         global_top_k=3
     )
